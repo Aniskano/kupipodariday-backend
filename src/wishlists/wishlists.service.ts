@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, In, Repository } from 'typeorm';
+import { DataSource, FindOneOptions, In, Repository } from 'typeorm';
 
 import { User } from '../users/entities/user.entity';
 import { WishesService } from '../wishes/wishes.service';
@@ -18,28 +18,41 @@ export class WishlistsService {
     @InjectRepository(Wishlist)
     private wishlistsRepository: Repository<Wishlist>,
     private wishesService: WishesService,
+    private dataSource: DataSource,
   ) {}
 
   async create(
     createWishlistDto: CreateWishlistDto,
     user: User,
   ): Promise<Wishlist> {
-    const items = await this.wishesService.findAll({
-      id: In(createWishlistDto.itemsId),
-    });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const items = await this.wishesService.findAll({
+        id: In(createWishlistDto.itemsId),
+      });
 
-    const wishlist = this.wishlistsRepository.create({
-      ...createWishlistDto,
-      items,
-      owner: user,
-    });
+      const wishlist = this.wishlistsRepository.create({
+        ...createWishlistDto,
+        items,
+        owner: user,
+      });
 
-    const savedWishlist = await this.wishlistsRepository.save(wishlist);
+      const savedWishlist = await this.wishlistsRepository.save(wishlist);
+      const result = this.findOne({
+        relations: ['owner', 'items'],
+        where: { id: savedWishlist.id },
+      });
+      await queryRunner.commitTransaction();
 
-    return this.findOne({
-      relations: ['owner', 'items'],
-      where: { id: savedWishlist.id },
-    });
+      return result;
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async findAll(): Promise<Wishlist[]> {

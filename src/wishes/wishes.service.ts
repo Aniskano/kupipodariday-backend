@@ -5,7 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, FindOptionsWhere, Repository } from 'typeorm';
+import {
+  DataSource,
+  FindOneOptions,
+  FindOptionsWhere,
+  Repository,
+} from 'typeorm';
 
 import { User } from '../users/entities/user.entity';
 import { CreateWishDto } from './dto/create-wish.dto';
@@ -17,27 +22,41 @@ export class WishesService {
   constructor(
     @InjectRepository(Wish)
     private wishesRepository: Repository<Wish>,
+    private dataSource: DataSource,
   ) {}
 
   async copyWish(id: number, user: User): Promise<Wish> {
-    const wish = await this.findOne({ where: { id } });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const wish = await this.findOne({ where: { id } });
 
-    const copiedWish = this.wishesRepository.create({
-      copied: 0,
-      description: wish.description,
-      image: wish.image,
-      link: wish.link,
-      name: wish.name,
-      owner: user,
-      price: wish.price,
-      raised: 0,
-    });
+      const copiedWish = this.wishesRepository.create({
+        copied: 0,
+        description: wish.description,
+        image: wish.image,
+        link: wish.link,
+        name: wish.name,
+        owner: user,
+        price: wish.price,
+        raised: 0,
+      });
 
-    wish.copied += 1;
+      wish.copied += 1;
 
-    await this.wishesRepository.save(wish);
+      await this.wishesRepository.save(wish);
 
-    return await this.wishesRepository.save(copiedWish);
+      const result = await this.wishesRepository.save(copiedWish);
+      await queryRunner.commitTransaction();
+
+      return result;
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async create(createWishDto: CreateWishDto, user: User): Promise<Wish> {

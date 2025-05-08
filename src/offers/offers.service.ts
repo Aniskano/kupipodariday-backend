@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, Repository } from 'typeorm';
+import { DataSource, FindOneOptions, Repository } from 'typeorm';
 
 import { UsersService } from '../users/users.service';
 import { WishesService } from '../wishes/wishes.service';
@@ -18,48 +18,63 @@ export class OffersService {
     private offersRepository: Repository<Offer>,
     private wishesService: WishesService,
     private usersService: UsersService,
+    private dataSource: DataSource,
   ) {}
 
   async create(createOfferDto: CreateOfferDto, userId: number): Promise<Offer> {
     const { amount, itemId } = createOfferDto;
+    const queryRunner = this.dataSource.createQueryRunner();
 
-    const user = await this.usersService.findOne({
-      relations: ['wishes', 'offers', 'wishlists'],
-      where: { id: userId },
-    });
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    const wish = await this.wishesService.findOne({
-      relations: ['owner', 'offers'],
-      where: { id: itemId },
-    });
+    try {
+      const user = await this.usersService.findOne({
+        relations: ['wishes', 'offers', 'wishlists'],
+        where: { id: userId },
+      });
 
-    const donationAndCurrentRaisedSum = wish.raised + amount;
+      const wish = await this.wishesService.findOne({
+        relations: ['owner', 'offers'],
+        where: { id: itemId },
+      });
 
-    if (user.id === wish.owner.id) {
-      throw new BadRequestException(
-        'Нельзя вносить деньги на собственные подарки',
-      );
+      const donationAndCurrentRaisedSum = wish.raised + amount;
+
+      if (user.id === wish.owner.id) {
+        throw new BadRequestException(
+          'Нельзя вносить деньги на собственные подарки',
+        );
+      }
+
+      if (wish.raised === wish.price) {
+        throw new BadRequestException('На этот подарок уже собраны деньги');
+      }
+
+      if (donationAndCurrentRaisedSum > wish.price) {
+        throw new BadRequestException(
+          'Сумма собранных средств не может превышать стоимость подарка',
+        );
+      }
+
+      await this.wishesService.updateOne(itemId, {
+        raised: donationAndCurrentRaisedSum,
+      });
+
+      const offer = await this.offersRepository.save({
+        ...createOfferDto,
+        item: wish,
+        user,
+      });
+      await queryRunner.commitTransaction();
+
+      return offer;
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
     }
-
-    if (wish.raised === wish.price) {
-      throw new BadRequestException('На этот подарок уже собраны деньги');
-    }
-
-    if (donationAndCurrentRaisedSum > wish.price) {
-      throw new BadRequestException(
-        'Сумма собранных средств не может превышать стоимость подарка',
-      );
-    }
-
-    await this.wishesService.updateOne(itemId, {
-      raised: donationAndCurrentRaisedSum,
-    });
-
-    return await this.offersRepository.save({
-      ...createOfferDto,
-      item: wish,
-      user,
-    });
   }
 
   async findAll(): Promise<Offer[]> {

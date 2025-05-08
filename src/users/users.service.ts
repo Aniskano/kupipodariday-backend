@@ -82,7 +82,29 @@ export class UsersService {
   }
 
   async updateOne(id: number, updateUserDto: UpdateUserDto): Promise<User> {
-    await this.findById(id);
+    const user = await this.findById(id);
+
+    if (updateUserDto.username && updateUserDto.username !== user.username) {
+      const existingByUsername = await this.usersRepository.findOne({
+        where: { username: ILike(`%${updateUserDto.username}%`) },
+      });
+      if (existingByUsername) {
+        throw new ConflictException(
+          'Пользователь с таким email или ником уже существует',
+        );
+      }
+    }
+
+    if (updateUserDto.email && updateUserDto.email !== user.email) {
+      const existingByEmail = await this.usersRepository.findOne({
+        where: { email: updateUserDto.email },
+      });
+      if (existingByEmail) {
+        throw new ConflictException(
+          'Пользователь с таким email или ником уже существует',
+        );
+      }
+    }
 
     if (updateUserDto.password) {
       updateUserDto.password = await this.hashService.hash(
